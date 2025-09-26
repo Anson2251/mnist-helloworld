@@ -1,0 +1,6 @@
+.venv/
+data/
+checkpoints/
+*.pth
+*.pt
+.DS_Store
