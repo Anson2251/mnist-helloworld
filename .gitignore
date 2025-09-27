@@ -4,3 +4,6 @@ checkpoints/
 *.pth
 *.pt
 .DS_Store
+__pycache__
+
+test_modularity.py

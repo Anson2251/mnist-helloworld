@@ -1,0 +1,31 @@
+# Configuration file for modular training
+
+# Dataset configuration
+dataset:
+  name: mnist  # Options: mnist, cifar10
+  root: ./data
+  download: true
+
+# Model configuration
+model:
+  name: mynet  # Options: lenet, mynet
+  num_classes: 10
+
+# Training configuration
+training:
+  epochs: 20
+  batch_size: 64
+  num_workers: 4
+  shuffle_train: true
+
+# Optimization configuration
+optimization:
+  learning_rate: 1e-3
+  optimizer: adamw  # Options: adamw, adam, sgd
+  weight_decay: 0.01
+  momentum: 0.9  # Only used for SGD
+
+# Checkpointing configuration
+checkpointing:
+  checkpoint_dir: checkpoints
+  save_frequency: 1
