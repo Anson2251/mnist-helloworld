@@ -1,6 +1,7 @@
 torch
 torchvision
+opencv-python
+Pillow
+numpy
 tqdm
 pyyaml
-opencv-python
-pillow

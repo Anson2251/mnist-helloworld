@@ -7,12 +7,6 @@ Supports multiple datasets and model architectures
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import sys
-import os
-from pathlib import Path
-
-# Add src to path
-# sys.path.append(str(Path(__file__).parent / 'src'))
 
 from src.datasets import DatasetRegistry
 from src.models import ModelRegistry
@@ -95,7 +89,7 @@ def main():
 
     # Create checkpoint manager
     checkpoint_manager = CheckpointManager(
-        checkpoint_dir=config.checkpointing['checkpoint_dir']
+        checkpoint_dir=config.checkpointing['checkpoint_dir'] + "/" + config.model['name']
     )
 
     # Create trainer
@@ -122,7 +116,7 @@ def main():
         logger.info(f"Training time: {results['training_time']:.2f} seconds")
 
         # Save final model
-        final_model_path = 'final_model.pth'
+        final_model_path = f"{config.checkpointing['checkpoint_dir']}/{config.model['name']}/final_model.pth"
         torch.save(model.state_dict(), final_model_path)
         logger.info(f"Final model saved as {final_model_path}")
 
@@ -130,7 +124,7 @@ def main():
         logger.info("Training interrupted by user")
 
         # Save interrupted model
-        interrupted_path = 'interrupted_model.pth'
+        interrupted_path = f"{config.checkpointing['checkpoint_dir']}/{config.model['name']}/interrupted_model.pth"
         torch.save(model.state_dict(), interrupted_path)
         logger.info(f"Interrupted model saved as {interrupted_path}")
 
