@@ -7,11 +7,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
 from PIL import Image, ImageTk
-from cv2.typing import MatLike
-from mpmath.ctx_mp import normalize
 import torch
 import torch.nn.functional as F
-import numpy as np
 import os
 import sys
 
@@ -27,7 +24,7 @@ class MNISTGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("MNIST Real-time Classification")
-        self.root.geometry("600x480")
+        self.root.geometry("640x480")
 
         # Initialize camera and model variables
         self.cap = None
@@ -72,7 +69,7 @@ class MNISTGUI:
 
         # Model selection
         ttk.Label(selection_bar, text="Model:").pack(side=tk.LEFT, padx=5)
-        self.model_var = tk.StringVar(value="mynet")
+        self.model_var = tk.StringVar(value="lenet")
         model_combo = ttk.Combobox(selection_bar, textvariable=self.model_var,
                                    values=ModelRegistry.list_available(),
                                    state="readonly", width=15)
@@ -185,13 +182,6 @@ class MNISTGUI:
         if self.is_running and self.cap is not None:
             ret, frame = self.cap.read()
             if ret:
-
-                # # Convert to RGB and resize for display
-                # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                # frame_resized = cv2.resize(frame_rgb, (320,180))
-                # frame_resized = frame_resized[0:180, 70:250]
-                #
-                # # Convert to grayscale
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 frame = cv2.resize(cv2.resize(frame, (320,180))[0:180, 70:250], (28, 28))
                 frame = torch.from_numpy(frame).to(self.device)
