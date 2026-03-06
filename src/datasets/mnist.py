@@ -1,14 +1,31 @@
 import torchvision
 import torchvision.transforms as transforms
 from .base import ClassificationDataset
+from .utils import ResizePad
 
 
 class MNISTDataset(ClassificationDataset):
     """MNIST dataset implementation."""
 
-    def get_train_transform(self) -> transforms.Compose:
+    def __init__(
+        self,
+        root: str = "./data",
+        download: bool = True,
+        reapply_transforms: bool = False,
+        image_size: int = 28,
+        output_channels: int = 1,
+    ):
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
+
+    def get_train_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.RandomAffine(
                     degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=3
                 ),
@@ -17,9 +34,13 @@ class MNISTDataset(ClassificationDataset):
             ]
         )
 
-    def get_test_transform(self) -> transforms.Compose:
+    def get_test_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.ToTensor(),
                 transforms.Normalize((0.1307,), (0.3081,)),
             ]
@@ -52,8 +73,8 @@ class MNISTDataset(ClassificationDataset):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     @property
     def input_size(self) -> tuple:
-        return (28, 28)
+        return (self.image_size, self.image_size)

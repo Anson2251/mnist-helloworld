@@ -20,16 +20,28 @@ class Subset631Dataset(ClassificationDataset):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = True,
+        image_size: int = 64,
+        output_channels: int = 1,
     ):
-        super().__init__(root, download, reapply_transforms)
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
         self._train_indices = None
         self._test_indices = None
 
-    def get_train_transform(self) -> transforms.Compose:
-        return get_character_train_transform(image_size=64)
+    def get_train_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_train_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
-    def get_test_transform(self) -> transforms.Compose:
-        return get_character_test_transform(image_size=64)
+    def get_test_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_test_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
     def load_data(self):
         """Load Subset 631 dataset."""
@@ -64,7 +76,7 @@ class Subset631Dataset(ClassificationDataset):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     def get_index_label_mapping(self) -> dict:
         """Get mapping from class index to character label.
@@ -93,7 +105,7 @@ class Subset631Dataset(ClassificationDataset):
 
     @property
     def input_size(self) -> tuple:
-        return (64, 64)
+        return (self.image_size, self.image_size)
 
     def _reload_train_data(self):
         """Reload training data with current transforms."""

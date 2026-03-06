@@ -3,6 +3,7 @@ import torchvision.transforms as transforms
 import random
 from torch.utils.data import Dataset
 from .base import TripletDatasetBase, BalancedTripletDataset, FixedTripletDataset
+from .utils import ResizePad
 
 
 class TripletMNISTDataset(TripletDatasetBase):
@@ -19,14 +20,22 @@ class TripletMNISTDataset(TripletDatasetBase):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 28,
+        output_channels: int = 1,
         num_triplets: int | None = None,
     ):
-        super().__init__(root, download, reapply_transforms)
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
         self.num_triplets = num_triplets
 
-    def get_train_transform(self) -> transforms.Compose:
+    def get_train_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.RandomAffine(
                     degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=3
                 ),
@@ -35,9 +44,13 @@ class TripletMNISTDataset(TripletDatasetBase):
             ]
         )
 
-    def get_test_transform(self) -> transforms.Compose:
+    def get_test_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.ToTensor(),
                 transforms.Normalize((0.1307,), (0.3081,)),
             ]
@@ -64,10 +77,10 @@ class TripletMNISTDataset(TripletDatasetBase):
         self.train_data_by_label = {i: [] for i in range(10)}
         self.test_data_by_label = {i: [] for i in range(10)}
 
-        for idx, (img, label) in enumerate(base_train): # pyright: ignore[ reportArgumentType]
+        for idx, (img, label) in enumerate(base_train):  # pyright: ignore[ reportArgumentType]
             self.train_data_by_label[label].append(idx)
 
-        for idx, (img, label) in enumerate(base_test): # pyright: ignore[ reportArgumentType]
+        for idx, (img, label) in enumerate(base_test):  # pyright: ignore[ reportArgumentType]
             self.test_data_by_label[label].append(idx)
 
         # Create triplet datasets
@@ -111,11 +124,11 @@ class TripletMNISTDataset(TripletDatasetBase):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     @property
     def input_size(self) -> tuple:
-        return (28, 28)
+        return (self.image_size, self.image_size)
 
 
 class TripletDataset(Dataset):
@@ -192,9 +205,31 @@ class BalancedTripletMNISTDataset(BalancedTripletDataset):
     Pre-generates a fixed set of triplets to ensure balanced sampling.
     """
 
-    def get_train_transform(self) -> transforms.Compose:
+    def __init__(
+        self,
+        root: str = "./data",
+        download: bool = True,
+        reapply_transforms: bool = False,
+        image_size: int = 28,
+        output_channels: int = 1,
+        triplets_per_class: int = 1000,
+    ):
+        super().__init__(
+            root,
+            download,
+            reapply_transforms,
+            image_size,
+            output_channels,
+            triplets_per_class,
+        )
+
+    def get_train_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.RandomAffine(
                     degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=3
                 ),
@@ -203,9 +238,13 @@ class BalancedTripletMNISTDataset(BalancedTripletDataset):
             ]
         )
 
-    def get_test_transform(self) -> transforms.Compose:
+    def get_test_transform(
+        self, image_size: int = 28, output_channels: int = 1
+    ) -> transforms.Compose:
         return transforms.Compose(
             [
+                transforms.Grayscale(num_output_channels=output_channels),
+                ResizePad(image_size, pad_value=0),
                 transforms.ToTensor(),
                 transforms.Normalize((0.1307,), (0.3081,)),
             ]
@@ -288,8 +327,8 @@ class BalancedTripletMNISTDataset(BalancedTripletDataset):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     @property
     def input_size(self) -> tuple:
-        return (28, 28)
+        return (self.image_size, self.image_size)

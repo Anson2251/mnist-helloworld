@@ -19,14 +19,18 @@ class BaseDataset(ABC):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 64,
+        output_channels: int = 1,
     ):
         self.root = root
         self.download = download
         self.reapply_transforms = reapply_transforms
+        self.image_size = image_size
+        self.output_channels = output_channels
         self._train_dataset: Optional[Dataset[Any]] = None
         self._test_dataset: Optional[Dataset[Any]] = None
-        self._train_transform = self.get_train_transform()
-        self._test_transform = self.get_test_transform()
+        self._train_transform = self.get_train_transform(image_size, output_channels)
+        self._test_transform = self.get_test_transform(image_size, output_channels)
 
     @property
     @abstractmethod
@@ -35,13 +39,27 @@ class BaseDataset(ABC):
         pass
 
     @abstractmethod
-    def get_train_transform(self) -> transforms.Compose:
-        """Get training data transforms."""
+    def get_train_transform(
+        self, image_size: int, output_channels: int
+    ) -> transforms.Compose:
+        """Get training data transforms.
+
+        Args:
+            image_size: Target image size
+            output_channels: Number of output channels
+        """
         pass
 
     @abstractmethod
-    def get_test_transform(self) -> transforms.Compose:
-        """Get testing data transforms."""
+    def get_test_transform(
+        self, image_size: int, output_channels: int
+    ) -> transforms.Compose:
+        """Get testing data transforms.
+
+        Args:
+            image_size: Target image size
+            output_channels: Number of output channels
+        """
         pass
 
     @abstractmethod
@@ -141,7 +159,9 @@ class BaseDataset(ABC):
             return
 
         # Regenerate transforms (this creates new random state for random transforms)
-        self._train_transform = self.get_train_transform()
+        self._train_transform = self.get_train_transform(
+            self.image_size, self.output_channels
+        )
 
         # Reload the training dataset with new transforms
         self._reload_train_data()
@@ -182,8 +202,12 @@ class TripletDatasetBase(BaseDataset):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 64,
+        output_channels: int = 1,
     ):
-        super().__init__(root, download, reapply_transforms)
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
 
 
 class BalancedTripletDataset(TripletDatasetBase):
@@ -198,9 +222,13 @@ class BalancedTripletDataset(TripletDatasetBase):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 64,
+        output_channels: int = 1,
         triplets_per_class: int = 1000,
     ):
-        super().__init__(root, download, reapply_transforms)
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
         self.triplets_per_class = triplets_per_class
 
     def _generate_triplets(
@@ -247,7 +275,9 @@ class BalancedTripletDataset(TripletDatasetBase):
                     positive_idx = random.choice(anchor_indices)
 
                 # Sample negative (different label)
-                negative_label = random.choice([label for label in labels if label != anchor_label])
+                negative_label = random.choice(
+                    [label for label in labels if label != anchor_label]
+                )
                 negative_indices = data_by_label[negative_label]
                 if not negative_indices:
                     continue  # Skip if no negative samples available

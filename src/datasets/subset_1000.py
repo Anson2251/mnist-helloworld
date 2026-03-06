@@ -22,16 +22,28 @@ class Subset1000Dataset(ClassificationDataset):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 64,
+        output_channels: int = 1,
     ):
-        super().__init__(root, download, reapply_transforms)
+        super().__init__(
+            root, download, reapply_transforms, image_size, output_channels
+        )
         self._train_indices = None
         self._test_indices = None
 
-    def get_train_transform(self) -> transforms.Compose:
-        return get_character_train_transform(image_size=64)
+    def get_train_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_train_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
-    def get_test_transform(self) -> transforms.Compose:
-        return get_character_test_transform(image_size=64)
+    def get_test_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_test_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
     def load_data(self):
         """Load Subset 1000 dataset."""
@@ -63,7 +75,7 @@ class Subset1000Dataset(ClassificationDataset):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     def get_index_label_mapping(self) -> dict:
         """Get mapping from class index to character label.
@@ -77,7 +89,7 @@ class Subset1000Dataset(ClassificationDataset):
         assert self._train_dataset is not None, "Train dataset is not loaded"
 
         # ImageFolder stores class_to_idx mapping
-        full_dataset = self._train_dataset.dataset # pyright: ignore[reportAttributeAccessIssue]
+        full_dataset = self._train_dataset.dataset  # pyright: ignore[reportAttributeAccessIssue]
         idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
         return idx_to_class
 
@@ -92,7 +104,7 @@ class Subset1000Dataset(ClassificationDataset):
 
     @property
     def input_size(self) -> tuple:
-        return (64, 64)
+        return (self.image_size, self.image_size)
 
     def _reload_train_data(self):
         """Reload training data with current transforms."""
@@ -126,15 +138,32 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
+        image_size: int = 64,
+        output_channels: int = 1,
         triplets_per_class: int = 100,
     ):
-        super().__init__(root, download, reapply_transforms, triplets_per_class)
+        super().__init__(
+            root,
+            download,
+            reapply_transforms,
+            image_size,
+            output_channels,
+            triplets_per_class,
+        )
 
-    def get_train_transform(self) -> transforms.Compose:
-        return get_character_train_transform(image_size=64)
+    def get_train_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_train_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
-    def get_test_transform(self) -> transforms.Compose:
-        return get_character_test_transform(image_size=64)
+    def get_test_transform(
+        self, image_size: int = 64, output_channels: int = 1
+    ) -> transforms.Compose:
+        return get_character_test_transform(
+            image_size=image_size, output_channels=output_channels
+        )
 
     def load_data(self):
         """Load Subset 1000 dataset and generate triplets."""
@@ -222,7 +251,7 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
 
     @property
     def input_channels(self) -> int:
-        return 1
+        return self.output_channels
 
     def get_index_label_mapping(self) -> dict:
         """Get mapping from class index to character label.
@@ -236,7 +265,7 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         assert self._train_dataset is not None, "Cannot load training dataset"
 
         # ImageFolder stores class_to_idx mapping
-        full_dataset = self._train_dataset.dataset # pyright: ignore[reportAttributeAccessIssue]
+        full_dataset = self._train_dataset.dataset  # pyright: ignore[reportAttributeAccessIssue]
         idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
         return idx_to_class
 
@@ -251,4 +280,4 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
 
     @property
     def input_size(self) -> tuple:
-        return (64, 64)
+        return (self.image_size, self.image_size)

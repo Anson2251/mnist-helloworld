@@ -5,10 +5,38 @@ import numpy as np
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import torchvision.transforms as transforms
+from PIL import Image
 
 from ..utils import setup_logger
 
 logger = setup_logger("datasets_utils")
+
+
+class ResizePad:
+    """Resize image while keeping aspect ratio and pad to square."""
+
+    def __init__(self, target_size, pad_value=0):
+        self.target_size = target_size
+        self.pad_value = pad_value
+
+    def __call__(self, img):
+        # Calculate aspect ratio
+        width, height = img.size
+        scale = self.target_size / max(width, height)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        # Handle PIL resampling
+        img = img.resize((new_width, new_height), Image.Resampling.BILINEAR)
+
+        # Create new image with pad_value
+        new_img = Image.new(
+            img.mode, (self.target_size, self.target_size), self.pad_value
+        )
+        # Paste centered
+        left = (self.target_size - new_width) // 2
+        top = (self.target_size - new_height) // 2
+        new_img.paste(img, (left, top))
+        return new_img
 
 
 def decode_label(label):
@@ -80,7 +108,9 @@ class AlbumentationsTransform:
         return transformed["image"]
 
 
-def get_character_train_transform(image_size: int = 64) -> transforms.Compose:
+def get_character_train_transform(
+    image_size: int = 64, output_channels: int = 1
+) -> transforms.Compose:
     """Get training transforms for character/digit recognition datasets.
 
     Uses Albumentations for aggressive augmentation suitable for handwritten
@@ -88,13 +118,14 @@ def get_character_train_transform(image_size: int = 64) -> transforms.Compose:
 
     Args:
         image_size: Target image size (default: 64x64)
+        output_channels: Number of output channels (default: 1 for grayscale)
 
     Returns:
         torchvision.transforms.Compose: Composed transform pipeline
     """
     return transforms.Compose(
         [
-            transforms.Grayscale(num_output_channels=1),
+            transforms.Grayscale(num_output_channels=output_channels),
             AlbumentationsTransform(
                 A.Compose(
                     [
@@ -138,8 +169,15 @@ def get_character_train_transform(image_size: int = 64) -> transforms.Compose:
                         ),
                         # Gaussian noise: simulate sensor noise
                         A.GaussNoise(p=0.2),
-                        # Final processing
-                        A.Resize(image_size, image_size),
+                        # Final processing: resize preserving aspect ratio, pad to square
+                        A.LongestMaxSize(max_size=image_size, p=1.0),
+                        A.PadIfNeeded(
+                            min_height=image_size,
+                            min_width=image_size,
+                            border_mode=0,
+                            fill=0,
+                            p=1.0,
+                        ),
                         A.Normalize(mean=0.5, std=0.5),
                         ToTensorV2(),
                     ]
@@ -149,24 +187,34 @@ def get_character_train_transform(image_size: int = 64) -> transforms.Compose:
     )
 
 
-def get_character_test_transform(image_size: int = 64) -> transforms.Compose:
+def get_character_test_transform(
+    image_size: int = 64, output_channels: int = 1
+) -> transforms.Compose:
     """Get test transforms for character/digit recognition datasets.
 
     Minimal augmentation for validation/testing.
 
     Args:
         image_size: Target image size (default: 64x64)
+        output_channels: Number of output channels (default: 1 for grayscale)
 
     Returns:
         torchvision.transforms.Compose: Composed transform pipeline
     """
     return transforms.Compose(
         [
-            transforms.Grayscale(num_output_channels=1),
+            transforms.Grayscale(num_output_channels=output_channels),
             AlbumentationsTransform(
                 A.Compose(
                     [
-                        A.Resize(image_size, image_size),
+                        A.LongestMaxSize(max_size=image_size, p=1.0),
+                        A.PadIfNeeded(
+                            min_height=image_size,
+                            min_width=image_size,
+                            border_mode=0,
+                            fill=0,
+                            p=1.0,
+                        ),
                         A.Normalize(mean=0.5, std=0.5),
                         ToTensorV2(),
                     ]
@@ -176,21 +224,24 @@ def get_character_test_transform(image_size: int = 64) -> transforms.Compose:
     )
 
 
-def get_simple_train_transform(image_size: int = 64) -> transforms.Compose:
+def get_simple_train_transform(
+    image_size: int = 64, output_channels: int = 1
+) -> transforms.Compose:
     """Get simple training transforms for character datasets.
 
     Lighter augmentation compared to get_character_train_transform.
 
     Args:
         image_size: Target image size (default: 64x64)
+        output_channels: Number of output channels (default: 1 for grayscale)
 
     Returns:
         torchvision.transforms.Compose: Composed transform pipeline
     """
     return transforms.Compose(
         [
-            transforms.Grayscale(num_output_channels=1),
-            transforms.Resize((image_size, image_size)),
+            transforms.Grayscale(num_output_channels=output_channels),
+            ResizePad(image_size, pad_value=0),
             transforms.RandomRotation(15),
             transforms.RandomHorizontalFlip(),
             transforms.ColorJitter(brightness=0.2, contrast=0.2),
@@ -200,19 +251,22 @@ def get_simple_train_transform(image_size: int = 64) -> transforms.Compose:
     )
 
 
-def get_simple_test_transform(image_size: int = 64) -> transforms.Compose:
+def get_simple_test_transform(
+    image_size: int = 64, output_channels: int = 1
+) -> transforms.Compose:
     """Get simple test transforms for character datasets.
 
     Args:
         image_size: Target image size (default: 64x64)
+        output_channels: Number of output channels (default: 1 for grayscale)
 
     Returns:
         torchvision.transforms.Compose: Composed transform pipeline
     """
     return transforms.Compose(
         [
-            transforms.Grayscale(num_output_channels=1),
-            transforms.Resize((image_size, image_size)),
+            transforms.Grayscale(num_output_channels=output_channels),
+            ResizePad(image_size, pad_value=0),
             transforms.ToTensor(),
             transforms.Normalize((0.5,), (0.5,)),
         ]
