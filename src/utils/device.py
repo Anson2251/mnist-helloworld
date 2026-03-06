@@ -2,13 +2,13 @@ import torch
 import os
 from typing import Tuple
 
-def get_device(priority: str = 'cuda') -> Tuple[torch.device, bool]:
+def get_device() -> Tuple[torch.device, bool]:
     """Get the best available device and whether we're using CPU."""
     using_cpu = False
 
-    if priority == 'cuda' and torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = torch.device('cuda')
-    elif priority == 'mps' and torch.backends.mps.is_available():
+    elif torch.backends.mps.is_available():
         device = torch.device('mps')
     else:
         using_cpu = True
