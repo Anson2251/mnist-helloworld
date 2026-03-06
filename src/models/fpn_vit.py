@@ -648,6 +648,7 @@ class FeaturePyramidViT(BaseModel):
 
         self.embed_dim = embed_dim
         self.fpn_mode = fpn_mode
+        self.input_size = img_size
 
         if lateral_channels_list is None:
             lateral_channels_list = [64, 128, 256]

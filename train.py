@@ -314,7 +314,15 @@ def main():
     # Save config to experiment directory (if not resuming)
     # Note: Config is saved after dataset creation to get actual values
 
-    # Create dataset
+    # Get input_size from config (model's requirement)
+    input_size_config = config.model.get("input_size", [64, 64])
+    if isinstance(input_size_config, list):
+        input_size = tuple(input_size_config)
+    else:
+        input_size = input_size_config
+    num_classes = config.model.get("num_classes", 10)
+
+    # Create dataset - adapts to model's input_size
     logger.info(f"Creating dataset: {config.dataset['name']}")
     reapply_transforms = getattr(args, "reapply_transforms", False)
     if reapply_transforms:
@@ -324,7 +332,20 @@ def main():
         root=config.dataset["root"],
         download=config.dataset["download"],
         reapply_transforms=reapply_transforms,
+        image_size=input_size[0],  # Model's target size
     )
+
+    # Create model - input_size from config, input_channels from dataset
+    logger.info(f"Creating model: {config.model['name']}")
+    model_kwargs = {
+        "num_classes": num_classes,
+        "input_size": input_size,
+        "input_channels": dataset.input_channels,  # From dataset
+    }
+    if "embedding_dim" in config.model:
+        model_kwargs["embedding_dim"] = config.model["embedding_dim"]
+
+    model = ModelRegistry.create(config.model["name"], **model_kwargs).to(device)
 
     # Export class mappings to experiment directory
     try:
@@ -343,12 +364,12 @@ def main():
         shuffle_train=config.training.get("shuffle_train", True),
     )
 
-    # Save config with actual dataset values (always update, even when resuming)
+    # Save config with model as source of truth
     config_dict = config.to_dict()
     config_dict["dataset"]["name"] = config.dataset["name"]
-    config_dict["model"]["num_classes"] = dataset.num_classes
-    config_dict["model"]["input_channels"] = dataset.input_channels
-    config_dict["model"]["input_size"] = dataset.input_size
+    config_dict["model"]["num_classes"] = model.num_classes
+    config_dict["model"]["input_channels"] = model.input_channels
+    config_dict["model"]["input_size"] = model.input_size
     with open(experiment_manager.config_file, "w") as f:
         yaml.dump(config_dict, f, default_flow_style=False)
 
@@ -367,37 +388,6 @@ def main():
         )
         model_config = checkpoint_data.get("model_config", {})
         logger.info(f"Loaded model config from checkpoint: {model_config}")
-
-    # Create model
-    logger.info(f"Creating model: {config.model['name']}")
-
-    # Use config from checkpoint if available, otherwise use current settings
-    # Note: dataset properties are source of truth for input data characteristics
-    if model_config and "num_classes" in model_config:
-        # Resume with same architecture as checkpoint
-        num_classes = model_config.get("num_classes", dataset.num_classes)
-        # Always use dataset's actual input channels and size (source of truth)
-        input_channels = dataset.input_channels
-        input_size = dataset.input_size
-        logger.info(
-            f"Using model config from checkpoint: classes={num_classes}, channels={input_channels}, size={input_size}"
-        )
-    else:
-        num_classes = dataset.num_classes
-        input_channels = dataset.input_channels
-        input_size = dataset.input_size
-
-    # Build model kwargs
-    model_kwargs = {
-        "num_classes": num_classes,
-        "input_channels": input_channels,
-        "input_size": input_size,
-    }
-    # Add embedding_dim if specified (for siamese models)
-    if "embedding_dim" in config.model:
-        model_kwargs["embedding_dim"] = config.model["embedding_dim"]
-
-    model = ModelRegistry.create(config.model["name"], **model_kwargs).to(device)
 
     # Get layer ID mapping for freeze functionality
     id_to_name = get_layer_id_mapping(model)
@@ -480,7 +470,7 @@ def main():
                 if os.path.exists(best_model_path):
                     os.remove(best_model_path)
                     logger.info(
-                        f"Removed old best_model.pt from different architecture"
+                        "Removed old best_model.pt from different architecture"
                     )
             else:
                 # Use epoch from log file as it's more reliable
@@ -548,7 +538,7 @@ def main():
             )
             logger.info(f"Best epoch: {results['best_epoch']}")
         else:
-            logger.info(f"\nTraining completed!")
+            logger.info("\nTraining completed!")
         logger.info(f"Experiment directory: {results['experiment_dir']}")
         logger.info(f"Epochs trained: {results['epochs_trained']}")
         logger.info(f"Best validation accuracy: {results['best_accuracy']:.2f}%")

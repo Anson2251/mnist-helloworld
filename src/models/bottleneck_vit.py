@@ -164,6 +164,7 @@ class BottleneckViT(BaseModel):
         )
 
         self.embed_dim = embed_dim
+        self.input_size = img_size
 
         # Stage 1: CNN Feature Extractor (Convolutional Bottleneck)
         # Larger kernel (7x7) for first layer, less stride for better feature preservation

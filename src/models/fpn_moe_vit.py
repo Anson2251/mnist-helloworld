@@ -30,17 +30,9 @@ class Expert(nn.Module):
 
 
 class MoEMLP(nn.Module):
-    def __init__(
-        self,
-        dim,
-        num_shared=1,
-        num_routed=64,
-        num_activated_routed=6,
-        expert_ratio=0.25,
-        act_layer=nn.GELU,
-        drop=0.0,
-        balance_factor=0.01,
-    ):
+    def __init__(self, dim, num_shared=1, num_routed=64,
+                 num_activated_routed=6, expert_ratio=0.5,
+                 act_layer=nn.GELU, drop=0.0, balance_factor=0.01):
         super().__init__()
         self.num_shared = num_shared
         self.num_routed = num_routed
@@ -53,64 +45,83 @@ class MoEMLP(nn.Module):
             [Expert(dim, expert_hidden, act_layer, drop) for _ in range(num_shared)]
         )
 
-        self.routed_experts = nn.ModuleList(
-            [Expert(dim, expert_hidden, act_layer, drop) for _ in range(num_routed)]
-        )
+        # ---- KEY CHANGE: Stacked expert weights for parallel computation ----
+        self.expert_fc1_weight = nn.Parameter(
+            torch.empty(num_routed, expert_hidden, dim))
+        self.expert_fc1_bias = nn.Parameter(torch.zeros(num_routed, expert_hidden))
+        self.expert_fc2_weight = nn.Parameter(
+            torch.empty(num_routed, dim, expert_hidden))
+        self.expert_fc2_bias = nn.Parameter(torch.zeros(num_routed, dim))
 
+        nn.init.kaiming_uniform_(self.expert_fc1_weight, a=5**0.5)
+        nn.init.kaiming_uniform_(self.expert_fc2_weight, a=5**0.5)
+
+        self.act = act_layer()
+        self.drop = nn.Dropout(drop)
         self.gate = nn.Linear(dim, num_routed, bias=False)
-
-        self.register_buffer("expert_freq", torch.zeros(num_routed))
-        self.register_buffer("expert_prob", torch.zeros(num_routed))
 
     def forward(self, x):
         B, N, dim = x.shape
+        T = B * N  # total tokens
 
-        shared_out = 0
-        for expert in self.shared_experts:
-            shared_out = shared_out + expert(x)
+        # Shared experts (unchanged)
+        shared_out = sum(expert(x) for expert in self.shared_experts)
 
+        # Gating
         gate_logits = self.gate(x)
-        gate_scores = F.softmax(gate_logits, dim=-1)
-
+        gate_scores = F.softmax(gate_logits, dim=-1)  # (B, N, E)
         top_scores, top_indices = torch.topk(
             gate_scores, self.num_activated_routed, dim=-1
-        )
+        )  # (B, N, K)
 
-        routed_out = torch.zeros_like(x)
+        # ---- PARALLEL DISPATCH (no for-loop) ----
+        flat_x = x.reshape(T, dim)                          # (T, D)
+        flat_indices = top_indices.reshape(T, -1)            # (T, K)
+        flat_scores = top_scores.reshape(T, -1)              # (T, K)
 
-        flat_x = x.view(-1, dim)
-        flat_scores = top_scores.view(-1, self.num_activated_routed)
-        flat_indices = top_indices.view(-1, self.num_activated_routed)
+        # Gather expert weights for each (token, top-k) pair
+        # expert_ids: (T*K,)
+        expert_ids = flat_indices.reshape(-1)
+        # Repeat each token K times
+        token_x = flat_x.unsqueeze(1).expand(-1, self.num_activated_routed, -1)
+        token_x = token_x.reshape(T * self.num_activated_routed, dim)  # (T*K, D)
 
+        # Batched expert forward: gather per-expert weights
+        w1 = self.expert_fc1_weight[expert_ids]   # (T*K, H, D)
+        b1 = self.expert_fc1_bias[expert_ids]      # (T*K, H)
+        w2 = self.expert_fc2_weight[expert_ids]    # (T*K, D, H)
+        b2 = self.expert_fc2_bias[expert_ids]      # (T*K, D)
+
+        # Forward: two linear layers with activation
+        h = torch.bmm(w1, token_x.unsqueeze(-1)).squeeze(-1) + b1  # (T*K, H)
+        h = self.act(h)
+        h = self.drop(h)
+        out = torch.bmm(w2, h.unsqueeze(-1)).squeeze(-1) + b2      # (T*K, D)
+        out = self.drop(out)
+
+        # Weight by gate scores and scatter-add back
+        scores = flat_scores.reshape(-1, 1)        # (T*K, 1)
+        out = out * scores                          # (T*K, D)
+
+        # Scatter back to token positions
+        token_indices = torch.arange(T, device=x.device).unsqueeze(1)
+        token_indices = token_indices.expand(-1, self.num_activated_routed)
+        token_indices = token_indices.reshape(-1)   # (T*K,)
+
+        routed_out = torch.zeros(T, dim, device=x.device)
+        routed_out.scatter_add_(0, token_indices.unsqueeze(-1).expand(-1, dim), out)
+        routed_out = routed_out.reshape(B, N, dim)
+
+        # Balance loss (vectorized)
         expert_freq = torch.zeros(self.num_routed, device=x.device)
-        expert_prob = torch.zeros(self.num_routed, device=x.device)
+        expert_freq.scatter_add_(0, expert_ids, torch.ones_like(expert_ids, dtype=torch.float))
+        expert_freq = expert_freq / (T * self.num_activated_routed)
 
-        for expert_id in range(self.num_routed):
-            mask = flat_indices == expert_id
-            if not mask.any():
-                continue
-
-            token_idx, k_idx = torch.where(mask)
-            selected_x = flat_x[token_idx]
-            selected_scores = flat_scores[token_idx, k_idx]
-            expert_out = self.routed_experts[expert_id](selected_x)
-            weighted_out = expert_out * selected_scores.unsqueeze(-1)
-
-            flat_routed_out = routed_out.view(-1, dim)
-            flat_routed_out.index_add_(0, token_idx, weighted_out)
-
-            expert_freq[expert_id] += len(token_idx)
-            expert_prob[expert_id] += selected_scores.sum().item()
-
-        total_tokens = B * N * self.num_activated_routed
-        expert_freq = expert_freq / total_tokens
-        expert_prob = expert_prob / total_tokens
-
-        out = shared_out + routed_out
+        expert_prob = gate_scores.reshape(T, -1).mean(dim=0)  # (E,)
 
         balance_loss = self.balance_factor * (expert_freq * expert_prob).sum()
 
-        return out, balance_loss, expert_freq, expert_prob
+        return shared_out + routed_out, balance_loss, expert_freq, expert_prob
 
 
 class PatchEmbed(nn.Module):
@@ -273,6 +284,42 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+def drop_path(x: torch.Tensor, keep_prob: float = 1.0, inplace: bool = False) -> torch.Tensor:
+    mask_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    # remember tuples have the * operator -> (1,) * 3 = (1,1,1)
+    mask: torch.Tensor = x.new_empty(mask_shape).bernoulli_(keep_prob)
+    mask.div_(keep_prob)
+    if inplace:
+        x.mul_(mask)
+    else:
+        x = x * mask
+    return x
+
+class DropPath(nn.Module):
+    """
+    DropPath (Stochastic Depth) regularization layer.
+    During training, randomly drops entire residual paths with probability `p`.
+     - `p=0` means no dropping (always keep).
+     - `p=1` means always drop (never keep).
+    The remaining paths are scaled by `1/(1-p)` to maintain expected feature magnitudes.
+    This encourages the model to learn more robust representations and can improve generalization.
+    Reference: https://arxiv.org/abs/1603.09382
+
+    Implementation from: https://github.com/FrancescoSaverioZuppichini/DropPath
+    """
+    def __init__(self, p: float = 0.5, inplace: bool = False):
+        super().__init__()
+        self.p = p
+        self.inplace = inplace
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training and self.p > 0:
+            x = drop_path(x, self.p, self.inplace)
+        return x
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(p={self.p})"
+
 
 class Block(nn.Module):
     def __init__(
@@ -289,9 +336,11 @@ class Block(nn.Module):
         moe_num_activated_routed=6,
         moe_expert_ratio=0.25,
         moe_balance_factor=0.01,
+        drop_path=0.1
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
+        self.drop_path = DropPath(drop_path) if drop_path > 0 else nn.Identity()
         self.attn = (
             Attention(
                 dim,
@@ -323,7 +372,7 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        x = x + self.attn(self.norm1(x))
+        x = x + self.drop_path(self.attn(self.norm1(x)))
         mlp_out, aux_loss, expert_freq, expert_prob = self.mlp(self.norm2(x))
         x = x + mlp_out
         return x, aux_loss, expert_freq, expert_prob
@@ -757,6 +806,7 @@ class FeaturePyramidMoEViT(BaseModel):
         self.embed_dim = embed_dim
         self.fpn_mode = fpn_mode
         self.moe_num_routed = moe_num_routed
+        self.input_size = img_size
 
         if lateral_channels_list is None:
             lateral_channels_list = [64, 128, 256]
@@ -1108,7 +1158,7 @@ class ModelVariant:
         "moe_num_shared": 2,
         "moe_num_routed": 4,
         "moe_num_activated_routed": 2,
-        "moe_expert_ratio": 0.25,
+        "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.01,
     }
 
@@ -1124,7 +1174,7 @@ class ModelVariant:
         "moe_num_shared": 2,
         "moe_num_routed": 8,
         "moe_num_activated_routed": 2,
-        "moe_expert_ratio": 0.25,
+        "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.1,
     }
 
@@ -1140,7 +1190,7 @@ class ModelVariant:
         "moe_num_shared": 2,
         "moe_num_routed": 16,
         "moe_num_activated_routed": 4,
-        "moe_expert_ratio": 0.25,
+        "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.1,
     }
 
@@ -1156,7 +1206,7 @@ class ModelVariant:
         "moe_num_shared": 4,
         "moe_num_routed": 32,
         "moe_num_activated_routed": 6,
-        "moe_expert_ratio": 0.25,
+        "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.1,
     }
 

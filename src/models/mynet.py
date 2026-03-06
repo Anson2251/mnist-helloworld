@@ -1,5 +1,5 @@
 import torch.nn as nn
-from typing import Any
+from typing import Any, Optional
 
 try:
     from .base import BaseModel
@@ -15,7 +15,7 @@ class Conv(nn.Module):
         ch_in: int,
         ch_out: int,
         kernel_size: tuple = (3, 3),
-        act: nn.Module = None,
+        act: Optional[nn.Module] = None,
         bn: bool = True,
     ):
         super().__init__()
@@ -33,7 +33,7 @@ class Linear(nn.Module):
         feat_in: int,
         feat_out: int,
         bias: bool = True,
-        act: nn.Module = None,
+        act: Optional[nn.Module] = None,
         dropout: float = 0.5,
     ):
         super().__init__()

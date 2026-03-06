@@ -1,6 +1,33 @@
 from typing import Dict, Type
 from .base import BaseModel
 
+# Auto-register models
+from .lenet import LeNet
+from .mynet import MyNet
+from .bottleneck_vit import BottleneckViT
+from .fpn_vit import (
+    FeaturePyramidViT,
+    SiameseFPNViT,
+    FeaturePyramidViTTiny,
+    FeaturePyramidViTSmall,
+    FeaturePyramidViTLarge,
+    SiameseFPNViTTiny,
+    SiameseFPNViTSmall,
+    SiameseFPNViTLarge,
+)
+from .fpn_moe_vit import (
+    FeaturePyramidMoEViT,
+    SiameseFPNMoEViT,
+    FeaturePyramidMoEViTTiny,
+    FeaturePyramidMoEViTSmall,
+    FeaturePyramidMoEViTLarge,
+    SiameseFPNMoEViTTiny,
+    SiameseFPNMoEViTSmall,
+    SiameseFPNMoEViTLarge,
+)
+from .siamese import SiameseNetwork
+from .alexnet import AlexNet
+
 
 class ModelRegistry:
     """Registry for model implementations."""
@@ -30,34 +57,6 @@ class ModelRegistry:
         """Create a model instance."""
         model_class = cls.get(name)
         return model_class(**kwargs)
-
-
-# Auto-register models
-from .lenet import LeNet
-from .mynet import MyNet
-from .bottleneck_vit import BottleneckViT
-from .fpn_vit import (
-    FeaturePyramidViT,
-    SiameseFPNViT,
-    FeaturePyramidViTTiny,
-    FeaturePyramidViTSmall,
-    FeaturePyramidViTLarge,
-    SiameseFPNViTTiny,
-    SiameseFPNViTSmall,
-    SiameseFPNViTLarge,
-)
-from .fpn_moe_vit import (
-    FeaturePyramidMoEViT,
-    SiameseFPNMoEViT,
-    FeaturePyramidMoEViTTiny,
-    FeaturePyramidMoEViTSmall,
-    FeaturePyramidMoEViTLarge,
-    SiameseFPNMoEViTTiny,
-    SiameseFPNMoEViTSmall,
-    SiameseFPNMoEViTLarge,
-)
-from .siamese import SiameseNetwork
-from .alexnet import AlexNet
 
 ModelRegistry.register("lenet", LeNet)
 ModelRegistry.register("mynet", MyNet)

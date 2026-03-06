@@ -1,6 +1,6 @@
 import argparse
 from typing import Dict, Any, Optional, List
-from pathlib import Path
+
 import yaml
 
 try:
@@ -71,6 +71,7 @@ class Config:
             "model": {
                 "name": args.model,
                 "num_classes": args.num_classes,
+                "input_size": [args.input_size, args.input_size],
                 "embedding_dim": getattr(args, "embedding_dim", 256),
             },
             "training": {
@@ -115,7 +116,12 @@ def get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
     return {
         "dataset": {"name": "mnist", "root": "./data", "download": True},
-        "model": {"name": "mynet", "num_classes": 10, "input_channels": 1},
+        "model": {
+            "name": "mynet",
+            "num_classes": 10,
+            "input_channels": 1,
+            "input_size": [28, 28],
+        },
         "training": {
             "epochs": 20,
             "batch_size": 64,
@@ -178,6 +184,12 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Device to use for training",
     )
     parser.add_argument("--num-classes", type=int, default=10, help="Number of classes")
+    parser.add_argument(
+        "--input-size",
+        type=int,
+        default=64,
+        help="Input image size (height and width, will be squared)",
+    )
 
     # Training arguments
     parser.add_argument("--epochs", type=int, default=20, help="Number of epochs")
