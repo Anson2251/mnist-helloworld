@@ -5,6 +5,8 @@ Supports multiple datasets and model architectures
 """
 
 import os
+os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'  # Disable albumentations update check
+
 import torch
 import torch.optim as optim
 from torchinfo import summary
@@ -247,7 +249,7 @@ def main():
 
     # Set up logging
     logger = setup_logger()
-    logger.info("Starting modular training script")
+    logger.info("Starting training")
 
     # Get device
     device, using_cpu = get_device()
@@ -276,9 +278,8 @@ def main():
 
     if args.fork:
         # Fork: load from source experiment but save to new one
-        assert experiment_manager.fork_source_dir is not None, (
-            "fork_source_dir should be set when forking"
-        )
+        assert experiment_manager.fork_source_dir is not None, "fork_source_dir should be set when forking"
+
         source_checkpoints_dir = os.path.join(
             experiment_manager.fork_source_dir, "checkpoints"
         )
@@ -320,13 +321,14 @@ def main():
         input_size = tuple(input_size_config)
     else:
         input_size = input_size_config
-    num_classes = config.model.get("num_classes", 10)
 
     # Create dataset - adapts to model's input_size
     logger.info(f"Creating dataset: {config.dataset['name']}")
     reapply_transforms = getattr(args, "reapply_transforms", False)
+
     if reapply_transforms:
         logger.info("Reapplying transforms after each epoch")
+
     dataset = DatasetRegistry.create(
         config.dataset["name"],
         root=config.dataset["root"],
@@ -335,6 +337,8 @@ def main():
         image_size=input_size[0],  # Model's target size
     )
 
+    num_classes = dataset.num_classes
+
     # Create model - input_size from config, input_channels from dataset
     logger.info(f"Creating model: {config.model['name']}")
     model_kwargs = {
@@ -342,6 +346,7 @@ def main():
         "input_size": input_size,
         "input_channels": dataset.input_channels,  # From dataset
     }
+
     if "embedding_dim" in config.model:
         model_kwargs["embedding_dim"] = config.model["embedding_dim"]
 
