@@ -413,7 +413,7 @@ def main():
     for k, v in model_info.items():
         info_str += f"\n  {k.rjust(padding_num)}: {v}"
     logger.info(f"Model info: {info_str}")
-    summary(model)
+    summary(model, input_size=(1, model.input_channels, config_dict["model"]["input_size"], config_dict["model"]["input_size"]), col_names=["input_size", "output_size", "num_params", "mult_adds"])
 
     # Create criterion using model's get_criterion method
     model_class = ModelRegistry.get(config.model["name"])
