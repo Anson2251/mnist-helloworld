@@ -49,6 +49,7 @@ class Trainer:
         self.patience = patience
         self.use_amp = use_amp and device.type == "cuda"
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
+        self.non_blocking = device.type == "cuda"
 
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
@@ -108,6 +109,9 @@ class Trainer:
             "drop_last": getattr(train_loader, "drop_last", False),
             "persistent_workers": getattr(train_loader, "persistent_workers", False),
         }
+        prefetch_factor = getattr(train_loader, "prefetch_factor", None)
+        if prefetch_factor is not None:
+            self._train_loader_kwargs["prefetch_factor"] = prefetch_factor
 
         # Initialize log file only if it doesn't exist
         if not os.path.exists(self.experiment_manager.log_file):
@@ -200,11 +204,11 @@ class Trainer:
             # Triplet training
             assert isinstance(self.train_metrics, TripletMetricsTracker)
             for _, (anchor, positive, negative, labels) in enumerate(pbar):
-                anchor = anchor.to(self.device)
-                positive = positive.to(self.device)
-                negative = negative.to(self.device)
+                anchor = anchor.to(self.device, non_blocking=self.non_blocking)
+                positive = positive.to(self.device, non_blocking=self.non_blocking)
+                negative = negative.to(self.device, non_blocking=self.non_blocking)
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
 
                 with autocast("cuda", enabled=self.use_amp):
                     anchor_emb = self.model(anchor)
@@ -270,9 +274,10 @@ class Trainer:
         else:
             # Standard classification training
             for batch_idx, (images, labels) in enumerate(pbar):
-                images, labels = images.to(self.device), labels.to(self.device)
+                images = images.to(self.device, non_blocking=self.non_blocking)
+                labels = labels.to(self.device, non_blocking=self.non_blocking)
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
 
                 with autocast("cuda", enabled=self.use_amp):
                     outputs = self.model(images)
@@ -342,14 +347,14 @@ class Trainer:
         start_time = time.time()
         num_batches = len(self.val_loader)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             if self.paradigm == "triplet":
                 assert isinstance(self.val_metrics, TripletMetricsTracker)
                 # Triplet validation
                 for anchor, positive, negative, labels in pbar:
-                    anchor = anchor.to(self.device)
-                    positive = positive.to(self.device)
-                    negative = negative.to(self.device)
+                    anchor = anchor.to(self.device, non_blocking=self.non_blocking)
+                    positive = positive.to(self.device, non_blocking=self.non_blocking)
+                    negative = negative.to(self.device, non_blocking=self.non_blocking)
 
                     with autocast("cuda", enabled=self.use_amp):
                         anchor_emb = self.model(anchor)
@@ -368,7 +373,11 @@ class Trainer:
                                 anchor_emb, _ = anchor_emb
                                 positive_emb, _ = positive_emb
                                 negative_emb, _ = negative_emb
-                            if self.is_moe and expert_freq is not None and expert_prob:
+                            if (
+                                self.is_moe
+                                and expert_freq is not None
+                                and expert_prob is not None
+                            ):
                                 self.val_moe_metrics.update(
                                     0.0, expert_freq, expert_prob
                                 )
@@ -390,7 +399,8 @@ class Trainer:
             else:
                 # Standard validation
                 for images, labels in pbar:
-                    images, labels = images.to(self.device), labels.to(self.device)
+                    images = images.to(self.device, non_blocking=self.non_blocking)
+                    labels = labels.to(self.device, non_blocking=self.non_blocking)
 
                     with autocast("cuda", enabled=self.use_amp):
                         outputs = self.model(images)
@@ -437,6 +447,9 @@ class Trainer:
     def _plot_training_curves(self):
         """Plot and save training curves."""
         try:
+            import matplotlib
+
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
 
             fig, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -507,8 +520,8 @@ class Trainer:
             plt.savefig(self.experiment_manager.plot_file, dpi=150)
             plt.close()
 
-        except ImportError:
-            logger.warning("matplotlib not available, skipping plot generation")
+        except Exception as e:
+            logger.warning(f"Skipping plot generation: {e}")
 
     def train(self, epochs: int, start_epoch: int = 0) -> Dict[str, Any]:
         """Train the model for specified epochs."""

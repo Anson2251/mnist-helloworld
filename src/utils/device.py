@@ -21,9 +21,8 @@ def get_optimal_workers(using_cpu: bool) -> Tuple[int, int]:
     if using_cpu:
         return 1, 1
 
-    num_cpus = os.cpu_count()
-    worker_num_unit = (num_cpus if num_cpus else 1) // 3
-    train_workers = max(1, worker_num_unit * 2)
-    val_workers = max(1, worker_num_unit)
+    num_cpus = os.cpu_count() or 1
+    train_workers = min(8, max(2, num_cpus // 2))
+    val_workers = min(4, max(1, train_workers // 2))
 
     return train_workers, val_workers
