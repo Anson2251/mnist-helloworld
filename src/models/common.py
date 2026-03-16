@@ -264,6 +264,41 @@ class C3Module(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
+class InvertedResidual(nn.Module):
+    """MobileNetV3-style block，比 C3 更适合文字特征提取"""
+    def __init__(self, in_ch, out_ch, stride=1, expand_ratio=2.0, use_se=True):
+        super().__init__()
+        hidden = int(in_ch * expand_ratio)
+        self.use_res = stride == 1 and in_ch == out_ch
+
+        layers = []
+        if hidden != in_ch:
+            layers.extend([
+                nn.Conv2d(in_ch, hidden, 1, bias=False),
+                nn.BatchNorm2d(hidden),
+                nn.SiLU(inplace=True),
+            ])
+        layers.extend([
+            nn.Conv2d(hidden, hidden, 3, stride=stride,
+                      padding=1, groups=hidden, bias=False),
+            nn.BatchNorm2d(hidden),
+            nn.SiLU(inplace=True),
+        ])
+        if use_se:
+            layers.append(SEBlock(hidden, reduction=4))
+        layers.extend([
+            nn.Conv2d(hidden, out_ch, 1, bias=False),
+            nn.BatchNorm2d(out_ch),
+        ])
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.block(x)
+        if self.use_res:
+            out = out + x
+        return out
+
+
 def drop_path(
     x: torch.Tensor, keep_prob: float = 1.0, inplace: bool = False
 ) -> torch.Tensor:

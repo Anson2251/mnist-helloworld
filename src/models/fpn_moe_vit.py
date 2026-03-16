@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any
+
 MetricsTracker = None
 try:
     from .base import BaseModel
@@ -12,6 +13,7 @@ try:
         ConvBlock,
         C3Module,
         DropPath,
+        InvertedResidual,
     )
     from ..training.metrics import MetricsTracker
 except:
@@ -23,8 +25,8 @@ except:
         ConvBlock,
         C3Module,
         DropPath,
+        InvertedResidual,
     )
-
 
 
 class Expert(nn.Module):
@@ -109,9 +111,7 @@ class MoEMLP(nn.Module):
         # Gating
         gate_logits = self.gate(x)
         gate_scores = F.softmax(gate_logits, dim=-1)  # (B, N, E)
-        top_scores, top_indices = torch.topk(
-            gate_scores, K, dim=-1
-        )  # (B, N, K)
+        top_scores, top_indices = torch.topk(gate_scores, K, dim=-1)  # (B, N, K)
 
         flat_x = x.reshape(T, dim)
 
@@ -122,10 +122,7 @@ class MoEMLP(nn.Module):
         # Step 1: Build (token_id, expert_id, score) pairs
         #   Each token has K pairs (one per selected expert)
         pair_token = (
-            torch.arange(T, device=x.device)
-            .unsqueeze(1)
-            .expand(-1, K)
-            .reshape(-1)
+            torch.arange(T, device=x.device).unsqueeze(1).expand(-1, K).reshape(-1)
         )  # (T*K,)
         pair_expert = top_indices.reshape(-1)  # (T*K,)
         pair_score = top_scores.reshape(-1)  # (T*K,)
@@ -528,6 +525,93 @@ class PyramidFeatureExtractor(nn.Module):
             return p1, p2, p3
 
 
+class PyramidFeatureExtractorInvertedResidual(nn.Module):
+    """InvertedResidual-based Pyramid（替换 C3）"""
+
+    def __init__(
+        self,
+        input_channels=24,
+        lateral_channels_list=[32, 64, 128],
+        out_dim=64,
+        fusion_mode="32x32",
+    ):
+        super().__init__()
+        self.fusion_mode = fusion_mode
+
+        # Stem: 轻量入口
+        self.stem = nn.Sequential(
+            nn.Conv2d(
+                input_channels,
+                lateral_channels_list[0],
+                3,
+                stride=2,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(lateral_channels_list[0]),
+            nn.SiLU(inplace=True),
+        )
+
+        # Stage 1: 32×32
+        ch0 = lateral_channels_list[0]
+        self.stage1 = nn.Sequential(
+            InvertedResidual(ch0, ch0, stride=1, expand_ratio=2.0),
+            InvertedResidual(ch0, ch0, stride=1, expand_ratio=2.0),
+        )
+
+        # Stage 2: 16×16
+        ch1 = lateral_channels_list[1]
+        self.stage2 = nn.Sequential(
+            InvertedResidual(ch0, ch1, stride=2, expand_ratio=2.5),
+            InvertedResidual(ch1, ch1, stride=1, expand_ratio=2.5),
+        )
+
+        # Stage 3: 8×8
+        ch2 = lateral_channels_list[2]
+        self.stage3 = nn.Sequential(
+            InvertedResidual(ch1, ch2, stride=2, expand_ratio=3.0),
+            InvertedResidual(ch2, ch2, stride=1, expand_ratio=3.0),
+        )
+
+        # Lateral projections (不需要额外 SE，InvertedResidual 内部已有)
+        if fusion_mode == "32x32":
+            self.lateral1 = nn.Conv2d(ch0, out_dim, 1, bias=False)
+            self.lateral2 = nn.Sequential(
+                nn.Conv2d(ch1, out_dim, 1, bias=False),
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            )
+            self.lateral3 = nn.Sequential(
+                nn.Conv2d(ch2, out_dim, 1, bias=False),
+                nn.Upsample(scale_factor=4, mode="bilinear", align_corners=False),
+            )
+            self.fusion = nn.Sequential(
+                nn.Conv2d(out_dim * 3, out_dim, 1, bias=False),
+                nn.BatchNorm2d(out_dim),
+                nn.SiLU(inplace=True),
+            )
+        else:
+            self.lateral1 = nn.Conv2d(ch0, out_dim, 1, bias=False)
+            self.lateral2 = nn.Conv2d(ch1, out_dim, 1, bias=False)
+            self.lateral3 = nn.Conv2d(ch2, out_dim, 1, bias=False)
+
+    def forward(self, x):
+        x = self.stem(x)
+        c1 = self.stage1(x)  # 32×32
+        c2 = self.stage2(c1)  # 16×16
+        c3 = self.stage3(c2)  # 8×8
+
+        p1 = self.lateral1(c1)
+        p2 = self.lateral2(c2)
+        p3 = self.lateral3(c3)
+
+        if self.fusion_mode == "32x32":
+            return self.fusion(torch.cat([p1, p2, p3], dim=1)), c2
+            #                                                    ↑
+            #                                    返回中间特征供局部池化
+        else:
+            return (p1, p2, p3), c2
+
+
 class FeaturePyramidMoEViT(BaseModel):
     """Vision Transformer with MoE MLP for Chinese Character Recognition."""
 
@@ -575,6 +659,7 @@ class FeaturePyramidMoEViT(BaseModel):
         moe_num_activated_routed=6,
         moe_expert_ratio=0.25,
         moe_balance_factor=0.01,
+        num_patches_per_scale=[1024, 256, 64],
         **kwargs,
     ):
         super().__init__(
@@ -595,11 +680,11 @@ class FeaturePyramidMoEViT(BaseModel):
             nn.SiLU(inplace=True),
         )
 
-        self.pyramid_extractor = PyramidFeatureExtractor(
+        self.pyramid_extractor = PyramidFeatureExtractorInvertedResidual(
             input_channels=preprocess_channels,
             lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
-            num_bottlenecks=num_bottlenecks,
+            # num_bottlenecks=num_bottlenecks,
             fusion_mode=fpn_mode,
         )
 
@@ -648,7 +733,7 @@ class FeaturePyramidMoEViT(BaseModel):
             self.vit = MultiScaleVisionTransformer(
                 embed_dim=self.embed_dim,
                 num_scales=3,
-                num_patches_per_scale=[1024, 256, 64],
+                num_patches_per_scale=num_patches_per_scale,
                 depth=depth,
                 num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
@@ -694,7 +779,7 @@ class FeaturePyramidMoEViT(BaseModel):
     def forward(self, x):
         x = self.image_preprocess(x)
 
-        features = self.pyramid_extractor(x)
+        features, _ = self.pyramid_extractor(x)
 
         if self.fpn_mode == "32x32":
             x = self.conv_bottleneck(features)
@@ -790,11 +875,11 @@ class SiameseFPNMoEViT(BaseModel):
             nn.SiLU(inplace=True),
         )
 
-        self.pyramid_extractor = PyramidFeatureExtractor(
+        self.pyramid_extractor = PyramidFeatureExtractorInvertedResidual(
             input_channels=preprocess_channels,
             lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
-            num_bottlenecks=num_bottlenecks,
+            # num_bottlenecks=num_bottlenecks,
             fusion_mode=fpn_mode,
         )
 
@@ -890,7 +975,7 @@ class SiameseFPNMoEViT(BaseModel):
     def forward(self, x):
         x = self.image_preprocess(x)
 
-        features = self.pyramid_extractor(x)
+        features, _ = self.pyramid_extractor(x)
 
         if self.fpn_mode == "32x32":
             x = self.conv_bottleneck(features)
@@ -927,37 +1012,41 @@ class ModelVariant:
     TINY = {
         "preprocess_channels": 16,
         "fpn_out_channels": 48,
-        "embed_dim": 64,
+        "embed_dim": 96,
         "depth": 2,
         "num_heads": 4,
         "lateral_channels": [24, 48, 96],
         "mlp_ratio": 2.0,
         "num_bottlenecks": 2,
-        "moe_num_shared": 2,
+        "moe_num_shared": 1,
         "moe_num_routed": 4,
-        "moe_num_activated_routed": 2,
+        "moe_num_activated_routed": 1,
         "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.01,
     }
 
     SMALL = {
-        "preprocess_channels": 32,
-        "fpn_out_channels": 112,
+        # ===== 保持 TINY 的计算骨架 =====
+        "preprocess_channels": 16,
         "embed_dim": 128,
-        "depth": 5,
-        "num_heads": 8,
-        "lateral_channels": [56, 112, 224],
-        "mlp_ratio": 3.0,
+        "depth": 2,
+        "num_heads": 2,  # ← 修复! head_dim=32
+        "lateral_channels": [24, 48, 96],
         "num_bottlenecks": 2,
-        "moe_num_shared": 2,
-        "moe_num_routed": 8,
+        # ===== MoE 杠杆：用参数换容量 =====
+        "moe_num_shared": 1,  # 减少 shared 省计算
+        "moe_num_routed": 16,  # ← 关键：从 4 → 48
         "moe_num_activated_routed": 2,
         "moe_expert_ratio": 0.5,
-        "moe_balance_factor": 0.1,
+        "moe_balance_factor": 0.05,
+        # ===== 减少 tokens 进一步省计算 =====
+        "fpn_mode": "multiscale",
+        # 去掉 32×32 scale，只保留 16×16 + 8×8
+        "num_patches_per_scale": [256, 64],  # 320 tokens
     }
 
     BASE = {
-        "preprocess_channels": 32,
+        "preprocess_channels": 24,
         "fpn_out_channels": 112,
         "embed_dim": 128,
         "depth": 6,
@@ -966,26 +1055,30 @@ class ModelVariant:
         "mlp_ratio": 3.0,
         "num_bottlenecks": 3,
         "moe_num_shared": 2,
-        "moe_num_routed": 16,
+        "moe_num_routed": 24,
         "moe_num_activated_routed": 4,
         "moe_expert_ratio": 0.5,
         "moe_balance_factor": 0.1,
     }
 
     LARGE = {
-        "preprocess_channels": 40,
-        "fpn_out_channels": 144,
-        "embed_dim": 160,
-        "depth": 8,
-        "num_heads": 8,
-        "lateral_channels": [72, 144, 288],
-        "mlp_ratio": 3.0,
-        "num_bottlenecks": 3,
-        "moe_num_shared": 4,
-        "moe_num_routed": 32,
-        "moe_num_activated_routed": 6,
+        # ===== 保持 TINY 的计算骨架 =====
+        "preprocess_channels": 32,
+        "embed_dim": 192,
+        "depth": 2,
+        "num_heads": 2,  # ← 修复! head_dim=32
+        "lateral_channels": [24, 48, 96],
+        "num_bottlenecks": 2,
+        # ===== MoE 杠杆：用参数换容量 =====
+        "moe_num_shared": 1,  # 减少 shared 省计算
+        "moe_num_routed": 48,  # ← 关键：从 4 → 48
+        "moe_num_activated_routed": 2,
         "moe_expert_ratio": 0.5,
-        "moe_balance_factor": 0.1,
+        "moe_balance_factor": 0.05,
+        # ===== 减少 tokens 进一步省计算 =====
+        "fpn_mode": "multiscale",
+        # 去掉 32×32 scale，只保留 16×16 + 8×8
+        "num_patches_per_scale": [256, 64],  # 320 tokens
     }
 
 
@@ -1004,7 +1097,8 @@ def create_fpn_moe_vit(variant="base", num_classes=631, **kwargs):
         lateral_channels_list=config.get("lateral_channels"),
         num_bottlenecks=config.get("num_bottlenecks", 3),
         num_classes=num_classes,
-        fpn_mode=config.get("fpn_mode", "32x32"),
+        fpn_mode=config.get("fpn_mode", "multiscale"),
+        num_patches_per_scale=config.get("num_patches_per_scale", None),
         moe_num_shared=config.get("moe_num_shared", 1),
         moe_num_routed=config.get("moe_num_routed", 8),
         moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1073,7 +1167,7 @@ class FeaturePyramidMoEViTSmall(FeaturePyramidMoEViT):
         super().__init__(
             input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
-            fpn_out_channels=config["fpn_out_channels"],
+            # fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
             depth=config["depth"],
             num_heads=config["num_heads"],
@@ -1213,20 +1307,20 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("Testing SiameseFPNMoEViT:")
     print("=" * 80)
-    model = SiameseFPNMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
-    summary(
-        model,
-        input_size=(1, 3, 64, 64),
-        col_names=["input_size", "output_size", "num_params", "mult_adds"],
-    )
+    # model = SiameseFPNMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
+    # summary(
+    #     model,
+    #     input_size=(1, 3, 64, 64),
+    #     col_names=["input_size", "output_size", "num_params", "mult_adds"],
+    # )
 
-    print("\n" + "=" * 80)
-    print("Testing forward pass (returns aux_loss):")
-    print("=" * 80)
-    model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
-    x = torch.randn(2, 3, 64, 64)
-    output, aux_loss, expert_freq, expert_prob = model(x)
-    print(f"Output shape: {output.shape}")
-    print(f"Aux loss: {aux_loss.item():.6f}")
-    print(f"Expert freq: {expert_freq}")
-    print(f"Expert prob: {expert_prob}")
+    # print("\n" + "=" * 80)
+    # print("Testing forward pass (returns aux_loss):")
+    # print("=" * 80)
+    # model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
+    # x = torch.randn(2, 3, 64, 64)
+    # output, aux_loss, expert_freq, expert_prob = model(x)
+    # print(f"Output shape: {output.shape}")
+    # print(f"Aux loss: {aux_loss.item():.6f}")
+    # print(f"Expert freq: {expert_freq}")
+    # print(f"Expert prob: {expert_prob}")
