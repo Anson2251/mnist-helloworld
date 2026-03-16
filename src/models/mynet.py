@@ -115,4 +115,4 @@ if __name__ == "__main__":
     from torchinfo import summary
 
     model = MyNet()
-    summary(model, input_size=(1, 1, 28, 28))
+    summary(model, input_size=(1, 1, 28, 28), col_names=["input_size", "output_size", "num_params", "mult_adds"])

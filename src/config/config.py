@@ -212,7 +212,7 @@ def create_config_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--muon-momentum",
         type=float,
-        default=0.95,
+        default=0.9,
         help="Muon momentum parameter (only used for muon optimizers)",
     )
     parser.add_argument(
