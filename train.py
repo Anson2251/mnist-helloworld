@@ -238,6 +238,21 @@ def create_scheduler(optimizer, config):
         raise ValueError(f"Unknown scheduler: {scheduler_name}")
 
 
+def normalize_input_size(input_size: int | list | tuple) -> tuple[int, int]:
+    """Normalize model input_size config to a (height, width) tuple."""
+    if isinstance(input_size, int):
+        return (input_size, input_size)
+
+    if isinstance(input_size, (list, tuple)):
+        if len(input_size) == 1:
+            side = int(input_size[0])
+            return (side, side)
+        if len(input_size) == 2:
+            return (int(input_size[0]), int(input_size[1]))
+
+    raise TypeError(f"Unsupported input_size value: {input_size!r}")
+
+
 def main():
     """Main training function."""
     # Parse arguments
@@ -255,8 +270,26 @@ def main():
     device, using_cpu = get_device()
     logger.info(f"Using device: {device}")
 
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
+        logger.info("Enabled CUDA throughput optimizations (cuDNN benchmark + TF32)")
+
     # Get optimal workers
-    train_workers, val_workers = get_optimal_workers(using_cpu)
+    optimal_train_workers, optimal_val_workers = get_optimal_workers(using_cpu)
+    configured_workers = config.training.get("num_workers")
+    if configured_workers is None:
+        train_workers, val_workers = optimal_train_workers, optimal_val_workers
+    else:
+        train_workers = max(0, int(configured_workers))
+        if train_workers == 0:
+            val_workers = 0
+        elif using_cpu:
+            val_workers = train_workers
+        else:
+            val_workers = max(1, min(optimal_val_workers, train_workers // 2 or 1))
     logger.info(
         f"Using {train_workers} workers for training, {val_workers} for validation"
     )
@@ -317,10 +350,7 @@ def main():
 
     # Get input_size from config (model's requirement)
     input_size_config = config.model.get("input_size", [64, 64])
-    if isinstance(input_size_config, list):
-        input_size = tuple(input_size_config)
-    else:
-        input_size = input_size_config
+    input_size = normalize_input_size(input_size_config)
 
     # Create dataset - adapts to model's input_size
     logger.info(f"Creating dataset: {config.dataset['name']}")
@@ -367,6 +397,7 @@ def main():
         batch_size=config.training["batch_size"],
         num_workers=train_workers,
         shuffle_train=config.training.get("shuffle_train", True),
+        val_num_workers=val_workers,
     )
 
     # Save config with model as source of truth
@@ -374,7 +405,7 @@ def main():
     config_dict["dataset"]["name"] = config.dataset["name"]
     config_dict["model"]["num_classes"] = model.num_classes
     config_dict["model"]["input_channels"] = model.input_channels
-    config_dict["model"]["input_size"] = model.input_size
+    config_dict["model"]["input_size"] = list(normalize_input_size(model.input_size))
     with open(experiment_manager.config_file, "w") as f:
         yaml.dump(config_dict, f, default_flow_style=False)
 
@@ -413,7 +444,12 @@ def main():
     for k, v in model_info.items():
         info_str += f"\n  {k.rjust(padding_num)}: {v}"
     logger.info(f"Model info: {info_str}")
-    summary(model, input_size=(1, model.input_channels, config_dict["model"]["input_size"], config_dict["model"]["input_size"]), col_names=["input_size", "output_size", "num_params", "mult_adds"])
+    model_height, model_width = normalize_input_size(model.input_size)
+    summary(
+        model,
+        input_size=(1, model.input_channels, model_height, model_width),
+        col_names=["input_size", "output_size", "num_params", "mult_adds"],
+    )
 
     # Create criterion using model's get_criterion method
     model_class = ModelRegistry.get(config.model["name"])

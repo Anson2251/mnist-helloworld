@@ -1,6 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Any
+import torch
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 
@@ -111,7 +112,11 @@ class BaseDataset(ABC):
         return output_path
 
     def get_dataloaders(
-        self, batch_size: int = 64, num_workers: int = 4, shuffle_train: bool = True
+        self,
+        batch_size: int = 64,
+        num_workers: int = 4,
+        shuffle_train: bool = True,
+        val_num_workers: Optional[int] = None,
     ) -> Tuple[DataLoader, DataLoader]:
         """Get train and test DataLoaders."""
         if self._train_dataset is None or self._test_dataset is None:
@@ -122,21 +127,41 @@ class BaseDataset(ABC):
 
         train_loader = DataLoader(
             self._train_dataset,
-            batch_size=batch_size,
-            shuffle=shuffle_train,
-            num_workers=num_workers,
-            pin_memory=True,
+            **self._build_loader_kwargs(
+                batch_size=batch_size,
+                shuffle=shuffle_train,
+                num_workers=num_workers,
+            ),
         )
 
         test_loader = DataLoader(
             self._test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
+            **self._build_loader_kwargs(
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers if val_num_workers is None else val_num_workers,
+            ),
         )
 
         return train_loader, test_loader
+
+    def _build_loader_kwargs(
+        self, batch_size: int, shuffle: bool, num_workers: int
+    ) -> dict[str, Any]:
+        """Build DataLoader kwargs with sensible defaults for throughput."""
+        worker_count = max(0, num_workers)
+        loader_kwargs: dict[str, Any] = {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "num_workers": worker_count,
+            "pin_memory": torch.cuda.is_available(),
+        }
+
+        if worker_count > 0:
+            loader_kwargs["persistent_workers"] = True
+            loader_kwargs["prefetch_factor"] = 4 if worker_count >= 4 else 2
+
+        return loader_kwargs
 
     def get_info(self) -> dict:
         """Get dataset information."""
